@@ -1,10 +1,61 @@
 import unittest
 import numpy as np
 from numpy.testing import assert_array_almost_equal, assert_array_equal, assert_almost_equal
-from okzm.assignmenter import Assignmenter, _best_client_set
+from sklearn.metrics import pairwise_distances
+from okzm.assignmenter import DistanceMatrix, Assignmenter, _best_client_set
 
 
 class TestAssignmenter(unittest.TestCase):
+
+    def test_DistanceMatrix(self):
+        C = np.array([[0, 0],   # client 0
+                      [0, 1],  # client 1
+                      [1, 1]]) # client 2
+        F = np.array([[-0.1, 0],  # facility 0
+                      [0, 1],  # facility 1
+                      [1.1, 0],  # facility 2
+                      [1, 1],  # facility 3
+                      [-1.2, 0],  # facility 4
+                      [0, 1.3]])  # facility 5
+        cs = np.array([0, 2])
+        fs_long = np.array([0, 2, 3, 5])
+        fs_short = np.array([2, 3])
+        dm = pairwise_distances(C, F)
+
+        # check that the clip parameter works
+        dmat = DistanceMatrix(C, F, clip=0.1)
+        assert np.all(dmat.distances(np.arange(len(C)), np.arange(len(F)), pairwise=True) <= 0.1)
+        dmat.set_clip(0.2)
+        assert np.all(dmat.distances(np.arange(len(C)), np.arange(len(F)), pairwise=True) <= 0.2)
+        assert np.max(dmat.distances(np.arange(len(C)), np.arange(len(F)), pairwise=True)) >= 0.2
+        dmat.set_clip(None)
+        assert np.max(dmat.distances(np.arange(len(C)), np.arange(len(F)), pairwise=True)) >= 1
+
+        # check when distances are computed realtime
+        dmat = DistanceMatrix(C, F)
+        assert_array_almost_equal(dmat.distances(cs, fs_long, pairwise=True), dm[np.ix_(cs, fs_long)], decimal=5)
+        assert_array_almost_equal(dmat.distances(cs, fs_short, pairwise=False), dm[(cs, fs_short)], decimal=5)
+
+        fi1, mdist1 = dmat.pairwise_dist_argmin_min(cs, fs_long)
+        fi2 = fs_long[np.argmin(dm[np.ix_(cs, fs_long)], axis=1)]
+        mdist2 = dm[(cs, fi2)]
+        assert_array_equal(fi1, fi2)
+        assert_array_almost_equal(mdist1, mdist2, decimal=5)
+
+        # check when distances are computed with cached distance matrix
+        dmat = DistanceMatrix(C, F, dist_mat=dm)
+        assert_array_almost_equal(dmat.distances(cs, fs_long, pairwise=True), dm[np.ix_(cs, fs_long)], decimal=5)
+        assert_array_almost_equal(dmat.distances(cs, fs_short, pairwise=False), dm[(cs, fs_short)], decimal=5)
+
+        fi1, mdist1 = dmat.pairwise_dist_argmin_min(cs, fs_long)
+        fi2 = fs_long[np.argmin(dm[np.ix_(cs, fs_long)], axis=1)]
+        mdist2 = dm[(cs, fi2)]
+        assert_array_equal(fi1, fi2)
+        assert_array_almost_equal(mdist1, mdist2, decimal=5)
+
+    def test_best_client_set(self):
+        # TODO: finish this
+        pass
 
     def test_Assignmenter_static(self):
         C = np.array([[0, 0],   # client 0
@@ -41,18 +92,35 @@ class TestAssignmenter(unittest.TestCase):
         assert_array_equal(idxs, [2, 2])
         assert_array_almost_equal(dists, [1.1, np.sqrt(1.21 + 1)], decimal=5)
 
-        # check that we can swap facility 2 with facility 1
+        # check that we can swap facility 2 with facility 1 (lazily)
         reassigned, new_assignment, new_dist = asgntr.can_swap(swap_out=[2], swap_in=[1],
-                                                               cost_thresh=0.5, avg_cost_thresh=0.5)
+                                                               cost_thresh=0.5, avg_cost_thresh=0.5,
+                                                               lazy=True)
         assert_array_equal(reassigned, [1])  # client 1 will be reassigned
         assert_array_equal(new_assignment, [1])  # The client will be reassigned to facility 1
         assert_array_equal(new_dist, [0])
+
+        # check that we can swap facility 2 with facility 1 (non-lazily)
+        reassigned, new_assignment, new_dist = asgntr.can_swap(swap_out=[2], swap_in=[1],
+                                                               cost_thresh=0.5, avg_cost_thresh=0.5,
+                                                               lazy=False)
+        assert_array_equal(reassigned, [0, 1])  # client 1 will be reassigned
+        assert_array_equal(new_assignment, [1, 1])  # The client will be reassigned to facility 1
+        assert_array_equal(new_dist, [1, 0])
 
         # check that we can swap facility [2, 4] with facility [0, 1]
         reassigned, new_assignment, new_dist = asgntr.can_swap(swap_out=[2, 4], swap_in=[0, 1],
                                                                cost_thresh=0.5, avg_cost_thresh=0.5)
         assert_array_equal(reassigned, [0, 1])  # client 0 and 1 will be reassigned
         assert_array_equal(new_assignment, [0, 1])  # client 0 assigned to facility 0, and 1 to 1
+        assert_array_equal(new_dist, [0.1, 0])
+
+        # check that we can swap facility 2 with facility 1 (non-lazily)
+        reassigned, new_assignment, new_dist = asgntr.can_swap(swap_out=[2, 4], swap_in=[0, 1],
+                                                               cost_thresh=0.5, avg_cost_thresh=0.5,
+                                                               lazy=False)
+        assert_array_equal(reassigned, [0, 1])  # client 1 will be reassigned
+        assert_array_equal(new_assignment, [0, 1])  # The client will be reassigned to facility 1
         assert_array_equal(new_dist, [0.1, 0])
 
         # check that we can't swap facility 2 with facility 1 given too high cost thresh

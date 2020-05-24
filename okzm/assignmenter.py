@@ -5,6 +5,65 @@ import warnings
 import heapq
 
 
+# TODO: rewrite the `[]` (__getitem__) operator to replace the cumbersome distances function
+class DistanceMatrix(object):
+    def __init__(self, C, F, clip=None, dist_mat=None):
+        """
+
+        :param C:
+        :param F:
+        :param clip:
+        :param dist_mat:
+        """
+        self._C = C
+        self._F = F
+        self._dist_mat = dist_mat
+        if clip is not None and (clip <= 0 or np.isinf(clip)):
+            clip = None
+        self._clip = clip
+
+    def set_clip(self, p):
+        self._clip = p
+
+    def distances(self, c_idxs, f_idxs, pairwise=True):
+        """
+        :param c_idxs: array of queried client idxs in self._C
+        :param f_idxs: array of queried facility idxs in self._F
+        :param pairwise: if True then return an 2D array containing the pairwise distances between
+            C[c_idxs] and F[f_idxs]; If False then return an 1D array containing the row-wise distances between
+            C[c_idxs] and F[f_idxs] (this requires c_idxs and f_idxs has the same length)
+        :return dists:
+        """
+        if self._dist_mat is None:
+            if pairwise:
+                dists = pairwise_distances(self._C[c_idxs], self._F[f_idxs])
+            else:
+                dists = np.linalg.norm(self._C[c_idxs] - self._F[f_idxs], axis=1)
+        else:
+            if pairwise:
+                dists = self._dist_mat[np.ix_(c_idxs, f_idxs)]
+            else:
+                dists = self._dist_mat[(c_idxs, f_idxs)]
+        return np.clip(dists, a_min=0, a_max=self._clip) if self._clip is not None else dists
+
+    def pairwise_dist_argmin_min(self, c_idxs, f_idxs):
+        """
+        :param c_idxs: array of queried client idxs in self._C
+        :param f_idxs: array of queried facility idxs in self._F
+        :return nearest, min_dist:
+            nearest: nearest[p] = q means self._C[c_idxs[p]]'s nearest facility idx
+                (among f_idxs) is q
+            min_dist: min_dist[p] = d means self._C[c_idxs[p]]'s distance to its nearest facility
+                (among self._F[f_idxs]) is d
+        """
+        # dists = self._pairwise_dist(client_idxs, facility_idxs)
+        dists = self.distances(c_idxs, f_idxs, pairwise=True)
+        nearest = np.argmin(dists, axis=1)
+        min_dist = dists[(np.arange(dists.shape[0]), nearest)]
+
+        return f_idxs[nearest], min_dist
+
+
 def _best_client_set(cost_reduction, cost_thresh=0, avg_cost_thresh=0, offset=0):
     """
     Given a vector that corresponds to the (connection) cost reduction per client of some operation,
@@ -47,7 +106,7 @@ class Assignmenter(object):
     def __init__(self, C, F, opened_facilities_idxs,
                  assignment=None,
                  arrived_clients_idxs=None,
-                 distances=None):
+                 dist_mat=None):
         self._C = C
         self._F = F
         self._n_clients, self._n_facilities = len(C), len(F)
@@ -55,15 +114,17 @@ class Assignmenter(object):
         self._closed_facilities_idxs = set(range(self._n_facilities)).difference(self._opened_facilities_idxs)
         #TODO: change active clients to a number instead of a list
         self._active_clients = list(range(len(self._C))) if arrived_clients_idxs is None else arrived_clients_idxs
-        self._distances = distances
         self._clusters = None
-        self._assignment = assignment
+        self._dist_mat = DistanceMatrix(C, F) if dist_mat is None else dist_mat
 
+        self._assignment = assignment
         # check if assignment is consistent with opened_facilities_idx
         if assignment is not None:
             assigned_to = set(np.unique(assignment[self._active_clients]))
-            if assigned_to != opened_facilities_idxs or len(assignment) != len(C):
-                raise ValueError("Invalid assignment: some client is assigned to closed facilities")
+            if not assigned_to.issubset(opened_facilities_idxs):
+                raise ValueError("Invalid assignment: some client is assigned to closed facilities.")
+            if len(assignment) != len(C):
+                raise ValueError("Invalid assignment: some client is unassigned.")
             self._assignment = np.array(assignment)
 
         # facility information maintained to support fast updates
@@ -80,7 +141,7 @@ class Assignmenter(object):
         #calculate cost
         self._conn_cost_vec = None
         self._cost = None
-        self._calc_cost()
+        self._init_cost()
 
     @property
     def clients(self):
@@ -116,6 +177,10 @@ class Assignmenter(object):
     def cost(self):
         return self._cost
 
+    @property
+    def cost_vec(self):
+        return self._conn_cost_vec
+
     def is_open(self, i):
         return i in self._opened_facilities_idxs
 
@@ -130,49 +195,37 @@ class Assignmenter(object):
         self._dist_to_nearest_facility_vec[j] = d[0]
         return self
 
-    def _get_dist(self, clients, facilities):
-        """
-
-        :param clients: array of queried client idxs
-        :param facilities: array of queried client idxs
-        :return dist: array of shape=(n_clients, n_facilities), pairwise dist between queried clients and facilities
-        """
-        if self._distances is not None:
-            dist = self._distances(clients, facilities)
-        else:
-            dist = pairwise_distances(self._C[clients], self._F[facilities])
-        return dist
+    def refresh_cache(self):
+        self._init_cost()
+        self._update_nearest_facilities_info()
 
     def _update_nearest_facilities_info(self):
         f_idxs = np.array(list(self._opened_facilities_idxs))
-        dist = self._get_dist(np.arange(len(self._C)), f_idxs)
-
-        nearest = np.argmin(dist, axis=1)
-        self._nearest_facility_vec[:] = f_idxs[nearest]
-        self._dist_to_nearest_facility_vec[:] = dist[(np.arange(len(self._C)), nearest)]
+        nearest, min_dist = self._dist_mat.pairwise_dist_argmin_min(np.arange(len(self._C)), f_idxs)
+        self._nearest_facility_vec[:] = nearest
+        self._dist_to_nearest_facility_vec[:] = min_dist
         # TODO: initialize heap: do we really nead that?
         return None
 
-    def _calc_cost(self):
+    def _init_cost(self):
         if self._opened_facilities_idxs is None:
             # only happens during initialization
             self._conn_cost_vec = np.full(len(self._C), np.inf)
         elif self._assignment is None:
             indices = np.array(list(self._opened_facilities_idxs))
-            F = self._F[indices]
-            C = self._C[self._active_clients]
             self._conn_cost_vec = np.zeros(len(self._C))
 
             # This indicates every client is assigned to its nearest facility
-            closest, dist = pairwise_distances_argmin_min(C, F)
+            closest, min_dist = self._dist_mat.pairwise_dist_argmin_min(self.active_client_idxs, indices)
             self._assignment = np.full(len(self._C), -1, dtype=np.int)
-            self._assignment[self._active_clients] = indices[closest]
-            self._conn_cost_vec[self._active_clients] = dist
+            self._assignment[self._active_clients] = closest
+            self._conn_cost_vec[self._active_clients] = min_dist
         else:
             self._conn_cost_vec = np.zeros(len(self._C))
-            C = self._C[self._active_clients]
-            F = self._F[self._assignment[self._active_clients]]
-            self._conn_cost_vec[self._active_clients] = np.linalg.norm(C - F, axis=1)
+            self._conn_cost_vec[self._active_clients] = self._dist_mat.distances(self._active_clients,
+                                                                                 self._assignment[self._active_clients],
+                                                                                 pairwise=False)
+
         self._cost = self._conn_cost_vec.sum()
         return None
 
@@ -205,13 +258,16 @@ class Assignmenter(object):
 
         return self
 
-    def can_swap(self, swap_out, swap_in, cost_thresh=0, avg_cost_thresh=0):
+    def can_swap(self, swap_out, swap_in, cost_thresh=0, avg_cost_thresh=0, lazy=True):
         """
         swap some opened facilities with new
         :param swap_out: list of facility indices to be closed
         :param swap_in: list of facility indices to be open
         :param cost_thresh: float, threshold for total cost reduced
         :param avg_cost_thresh: float, threshold for cost-per-recourse reduced
+        :param lazy: If True, only reassign clients that are previously assigned to facilities in swap_out, i.e.,
+            if j is not originally assigned to swap_out, then it won't be reassigned even if some i in swap_in is
+            closer to j that its current hosting facility.
         :return (reassigned, new_assignment):
             reassigned: list of indices of clients to be reassigned.
             new_assignment: array of shape=(n_reassigned,), indices of facilities to be assigned to
@@ -225,10 +281,17 @@ class Assignmenter(object):
         # calculate the cost saved via this swap operation, "_a_s" means "after swap"
         reassigned = np.where(np.isin(self._assignment, swap_out))[0]
         facilities_a_s = np.array(list(self._opened_facilities_idxs.difference(swap_out).union(swap_in)))
-        dist_a_s = self._get_dist(reassigned, facilities_a_s)
-        nearest_f_a_s = np.argmin(dist_a_s, axis=1)
-        cost_a_s = dist_a_s[(np.arange(dist_a_s.shape[0]), nearest_f_a_s)]
-        nearest_f_a_s = facilities_a_s[nearest_f_a_s]
+        if not lazy:
+            _, min_d_a_s = self._dist_mat.pairwise_dist_argmin_min(self._active_clients, facilities_a_s)
+            _, min_ds_curr = self.nearest_facility(self._active_clients)
+            nearest_f_changed = np.array(self._active_clients)[np.where(min_d_a_s < min_ds_curr)[0]]
+            reassigned = set(nearest_f_changed).union(reassigned)
+            if len(reassigned) == 0:
+                return None, None, None
+            reassigned = np.array(list(reassigned))
+            reassigned.sort()
+
+        nearest_f_a_s, cost_a_s = self._dist_mat.pairwise_dist_argmin_min(reassigned, facilities_a_s)
 
         saved_cost = self._conn_cost_vec[reassigned].sum() - cost_a_s.sum()
         if saved_cost > cost_thresh and saved_cost / (len(reassigned) + len(swap_out)) > avg_cost_thresh:
