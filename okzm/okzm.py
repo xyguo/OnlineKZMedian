@@ -34,12 +34,17 @@ class OnlineKZMed(object):
     def __init__(self, n_clusters, n_outliers=0, epsilon=0.1, gamma=1, ell=1,
                  debugging=False):
         """
-
-        :param n_clusters:
-        :param n_outliers:
-        :param epsilon:
-        :param gamma:
-        :param ell:
+        Implementation of the bi-criteria online (k,z)-median algorithm based on local search
+        :param n_clusters: int, number of clusters (i.e, k).
+            The algorithm will open at most n_clusters many facilities.
+        :param n_outliers: int, number of outliers (i.e, z)
+            The algorithm might discard more than n_outliers many data points
+        :param epsilon: float, epsilon/n_clusters is the smallest fraction of cost that needs to be reduced
+            per each local operation
+        :param gamma: float, slackness on the number of outliers allowed, the algorithm will discard
+            at most (1 + 1/self._ell) * (1 + gamma) / (1 - epsilon) * n_outliers many outliers.
+        :param ell: int, maximum number of facilities allowed to be swapped in one local operation.
+        :param debugging: boolean, whether to print extra information for debugging purpose
         """
         self._n_clusters = n_clusters
         self._n_outliers = n_outliers
@@ -103,7 +108,8 @@ class OnlineKZMed(object):
         data set C and iterate through it.
         :param C: array of shape=(n_clients, n_features)
         :param F: array of shape=(n_facilities, n_features)
-        :param distances: array of shape=(n_clients, n_facilities), distance[j, i] is the distance between client j and facility i
+        :param distances: array of shape=(n_clients, n_facilities), distance[j, i] is the distance
+            between client j and facility i. If None, then the distance will be computed on-the-fly.
         :param init_p: float, the init threshold parameter for the penalty distance
         :return self:
         """
@@ -125,7 +131,7 @@ class OnlineKZMed(object):
                 p = min(1 / (3 * n_outliers), 1 / (self._gamma * n_outliers))
         else:
             p = init_p
-        dist = DistanceMatrix(C, F, dist_mat=distances, clip=p)
+        dist = DistanceMatrix(C, F, dist_mat=distances, p=p)
 
         # initialization: assign the first k client to k nearest facilities
         debug_print("Initialization with p = {} ...".format(p), self._debugging)
@@ -199,7 +205,7 @@ class OnlineKZMed(object):
         return self
 
     def _local_search(self, rho, assignmenter, ell=1):
-        """conduct one step of rho-efficient ell-swap"""
+        """conduct one step of (rho * cost)-efficient ell-swap"""
         n_opened = len(assignmenter.opened_idxs)
         ell = min(ell, n_opened)
 

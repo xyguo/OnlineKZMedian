@@ -23,7 +23,7 @@ class TestAssignmenter(unittest.TestCase):
         dm = pairwise_distances(C, F)
 
         # check that the clip parameter works
-        dmat = DistanceMatrix(C, F, clip=0.1)
+        dmat = DistanceMatrix(C, F, p=0.1)
         assert np.all(dmat.distances(np.arange(len(C)), np.arange(len(F)), pairwise=True) <= 0.1)
         dmat.set_clip(0.2)
         assert np.all(dmat.distances(np.arange(len(C)), np.arange(len(F)), pairwise=True) <= 0.2)
