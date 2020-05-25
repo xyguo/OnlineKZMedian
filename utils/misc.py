@@ -1,4 +1,6 @@
 import numpy as np
+from okzm.kzmeans import kz_means
+from okzm.kzmedian import kzmedian_cost_
 from sklearn.exceptions import NotFittedError
 from sklearn.utils import check_array
 from sklearn.metrics import pairwise_distances_argmin_min
@@ -30,3 +32,6 @@ def compute_cost(X, cluster_centers, cost_func, remove_outliers=None):
         return cost_func(X[dist_idxs], cluster_centers)
     else:
         return cost_func(X, cluster_centers)
+
+
+

@@ -160,7 +160,7 @@ def kz_median(X, n_clusters, n_outliers, sample_weights=None):
 
 def kmedian_(X, sample_weights, n_clusters, init='kmedian++'):
     """
-    Weighted K-Means implementation.
+    Weighted K-Median implementation.
     :param X:
     :param sample_weights:
     :param n_clusters:

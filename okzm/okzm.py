@@ -31,7 +31,9 @@ def _trivial_k_median(clients, facilities):
 
 
 class OnlineKZMed(object):
-    def __init__(self, n_clusters, n_outliers=0, epsilon=0.1, gamma=1, ell=1,
+    def __init__(self, n_clusters, n_outliers=0,
+                 epsilon=0.1, gamma=1, ell=1,
+                 random_swap_in=None, random_swap_out=None,
                  debugging=False):
         """
         Implementation of the bi-criteria online (k,z)-median algorithm based on local search
@@ -44,6 +46,10 @@ class OnlineKZMed(object):
         :param gamma: float, slackness on the number of outliers allowed, the algorithm will discard
             at most (1 + 1/self._ell) * (1 + gamma) / (1 - epsilon) * n_outliers many outliers.
         :param ell: int, maximum number of facilities allowed to be swapped in one local operation.
+        :param random_swap_in: int, number of swap-in choices sampled among opened facilities.
+            If None, enumerate all swap-in choices among opened facilities.
+        :param random_swap_out: int, number of swap-out choices sampled among opened facilities.
+            If None, enumerate all swap-out choices among opened facilities.
         :param debugging: boolean, whether to print extra information for debugging purpose
         """
         self._n_clusters = n_clusters
@@ -52,6 +58,10 @@ class OnlineKZMed(object):
         self._ell = ell
         self._gamma = gamma
         self._debugging = debugging
+        self._random_swap_in = None if random_swap_in is None or random_swap_in <= 0 \
+            else random_swap_in
+        self._random_swap_out = None if random_swap_out is None or random_swap_out <= 0 \
+            else random_swap_out
 
         self._assignmenter = None
         self._cluster_centers = None
@@ -210,8 +220,22 @@ class OnlineKZMed(object):
         ell = min(ell, n_opened)
 
         for n_swapped in range(1, ell+1):
-            for swap_out in np.random.permutation(list(combinations(assignmenter.opened_idxs, n_swapped))):
-                for swap_in in np.random.permutation(list(combinations(assignmenter.closed_idxs, n_swapped))):
+            # sample or enumerate all possible swap-out choices
+            swap_out_choices = np.array(list(combinations(assignmenter.opened_idxs, n_swapped)))
+            np.random.shuffle(swap_out_choices)
+            if self._random_swap_out is not None:
+                n_swaps = min(self._random_swap_out, len(swap_out_choices))
+                swap_out_choices = swap_out_choices[:n_swaps]
+
+            # sample or enumerate all swap-in choices
+            swap_in_choices = np.array(list(combinations(assignmenter.closed_idxs, n_swapped)))
+            np.random.shuffle(swap_in_choices)
+            if self._random_swap_in is not None:
+                n_swaps = min(self._random_swap_in, len(swap_in_choices))
+                swap_in_choices = swap_in_choices[:n_swaps]
+
+            for swap_out in swap_out_choices:
+                for swap_in in swap_in_choices:
                     reassigned, connection, cost = assignmenter.can_swap(
                         swap_out, swap_in,
                         cost_thresh=rho * n_swapped * assignmenter.cost,

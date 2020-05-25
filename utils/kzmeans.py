@@ -270,3 +270,4 @@ class KZMeans(object):
     def predict(self, X):
         nearest, _ = pairwise_distances_argmin_min(X, self.cluster_centers_)
         return nearest
+
