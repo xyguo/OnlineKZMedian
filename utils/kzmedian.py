@@ -5,7 +5,7 @@
 import numpy as np
 
 from sklearn.preprocessing import normalize
-from sklearn.metrics.pairwise import pairwise_distances, pairwise_distances_argmin_min
+from sklearn.metrics.pairwise import pairwise_distances_argmin_min
 from sklearn.utils import check_array
 
 

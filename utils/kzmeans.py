@@ -7,7 +7,7 @@ import numpy as np
 from sklearn.preprocessing import normalize
 from sklearn.metrics.pairwise import euclidean_distances, pairwise_distances_argmin_min
 from sklearn.utils import check_array
-from utils import compute_cost
+from .misc import compute_cost
 
 
 def kzmeans_cost_(X, C, sample_weights=None, n_outliers=0, L=None, element_wise=False):
