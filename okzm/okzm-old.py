@@ -2,7 +2,8 @@
 import numpy as np
 from sklearn.exceptions import NotFittedError
 from sklearn.metrics import pairwise_distances_argmin
-from .assignmenter import Assignmenter, DistanceMatrix
+from itertools import combinations
+from .assignmenter import Assignmenter, DistanceMatrix, SimpleAssignmenter
 from utils import debug_print
 
 
@@ -31,7 +32,7 @@ def _trivial_k_median(clients, facilities):
 
 class OnlineKZMed(object):
     def __init__(self, n_clusters, n_outliers=0,
-                 epsilon=0.1, gamma=1,
+                 epsilon=0.1, gamma=1, ell=1,
                  random_swap_in=None, random_swap_out=None,
                  debugging=False):
         """
@@ -44,6 +45,7 @@ class OnlineKZMed(object):
             per each local operation
         :param gamma: float, slackness on the number of outliers allowed, the algorithm will discard
             at most (1 + 1/self._ell) * (1 + gamma) / (1 - epsilon) * n_outliers many outliers.
+        :param ell: int, maximum number of facilities allowed to be swapped in one local operation.
         :param random_swap_in: int, number of swap-in choices sampled among opened facilities.
             If None, enumerate all swap-in choices among available facilities.
         :param random_swap_out: int, number of swap-out choices sampled among opened facilities.
@@ -53,6 +55,7 @@ class OnlineKZMed(object):
         self._n_clusters = n_clusters
         self._n_outliers = n_outliers
         self._epsilon = epsilon
+        self._ell = ell
         self._gamma = gamma
         self._debugging = debugging
         self._random_swap_in = None if random_swap_in is None or random_swap_in <= 0 \
@@ -145,18 +148,25 @@ class OnlineKZMed(object):
         arrived_clients = list(range(n_clusters))
         opened_facilities, initial_asgn = _trivial_k_median(clients=C[arrived_clients],
                                                             facilities=F)
-        self._assignmenter = Assignmenter(C, F,
-                                          opened_facilities_idxs=opened_facilities,
-                                          next_client=n_clusters,
-                                          dist_mat=dist)
+        # asgn = np.full(n_clients, -1, dtype=np.int)
+        # asgn[arrived_clients] = initial_asgn
+        self._assignmenter = SimpleAssignmenter(C, F,
+                                                opened_facilities_idxs=opened_facilities,
+                                                next_client=n_clusters,
+                                                # assignment=asgn,
+                                                dist_mat=dist)
         prev_cost = self._assignmenter.cost
 
         # accepting subsequent clients
-        n_outliers_thresh = 2 * (1 + self._gamma) / (1 - self._epsilon) * self._n_outliers
+        n_outliers_thresh = np.int((1 + 1/self._ell) * (1 + self._gamma) / (1 - self._epsilon) * self._n_outliers)
         debug_print("Tolerate at most {} outliers".format(n_outliers_thresh), self._debugging)
         for j in range(n_clusters, n_clients):
             # Accommodate the new arrived client j by assigning it to its nearest facility.
             self._assignmenter.arrive(j)
+            # TODO: should this 1-swap also be part of the accommodating step?
+            # self._local_search(rho=0,
+            #                    assignment=self._assignmenter,
+            #                    ell=1)
 
             # If client j doesn't increase cost too much, then skip local search
             if self._assignmenter.cost < 2 * prev_cost:
@@ -168,13 +178,19 @@ class OnlineKZMed(object):
                         self._debugging)
             rho = self._epsilon / n_clusters
             while True:
-                ok, f_rec, c_rec = self._local_search(rho=rho,
-                                                      assignmenter=self._assignmenter)
+                # ok, f_rec, c_rec = self._local_search(rho=rho,
+                #                                       assignmenter=self._assignmenter,
+                #                                       ell=self._ell)
+                ok, f_rec, c_rec = self._local_search_simple(rho=rho,
+                                                             assignmenter=self._assignmenter)
                 while ok:
                     self._facility_recourse += f_rec
                     self._client_recourse += c_rec
-                    ok, f_rec, c_rec = self._local_search(rho=rho,
-                                                          assignmenter=self._assignmenter)
+                    # ok, f_rec, c_rec = self._local_search(rho=rho,
+                    #                                       assignmenter=self._assignmenter,
+                    #                                       ell=self._ell)
+                    ok, f_rec, c_rec = self._local_search_simple(rho=rho,
+                                                                 assignmenter=self._assignmenter)
                 _, d = self._assignmenter.nearest_facility(list(range(j)))
 
                 # control the number of outliers
@@ -202,7 +218,41 @@ class OnlineKZMed(object):
 
         return self
 
-    def _local_search(self, rho, assignmenter):
+    def _local_search(self, rho, assignmenter, ell=1):
+        """conduct one step of (rho * cost)-efficient ell-swap"""
+        n_opened = len(assignmenter.opened_idxs)
+        ell = min(ell, n_opened)
+
+        for n_swapped in range(1, ell+1):
+            # sample or enumerate all possible swap-out choices
+            swap_out_choices = np.array(list(combinations(assignmenter.opened_idxs, n_swapped)))
+            np.random.shuffle(swap_out_choices)
+            if self._random_swap_out is not None:
+                n_swaps = min(self._random_swap_out, len(swap_out_choices))
+                swap_out_choices = swap_out_choices[:n_swaps]
+
+            # sample or enumerate all swap-in choices
+            swap_in_choices = np.array(list(combinations(assignmenter.closed_idxs, n_swapped)))
+            np.random.shuffle(swap_in_choices)
+            if self._random_swap_in is not None:
+                n_swaps = min(self._random_swap_in, len(swap_in_choices))
+                swap_in_choices = swap_in_choices[:n_swaps]
+
+            for swap_out in swap_out_choices:
+                for swap_in in swap_in_choices:
+                    reassigned, connection, cost = assignmenter.can_swap(
+                        swap_out, swap_in,
+                        cost_thresh=rho * n_swapped * assignmenter.cost,
+                        avg_cost_thresh=0, lazy=False
+                    )
+                    if reassigned is not None:
+                        debug_print("-- Local search: swap out {} and swap in {}".format(swap_out, swap_in),
+                                    self._debugging)
+                        assignmenter.swap(swap_out, swap_in, reassigned, connection, cost)
+                        return True, len(swap_out) + len(swap_in), len(reassigned)
+        return False, None, None
+
+    def _local_search_simple(self, rho, assignmenter):
         """conduct one step of (rho * cost)-efficient swap"""
         # sample or enumerate all possible swap-out choices
         swap_out_choices = np.array(list(assignmenter.opened_idxs))
