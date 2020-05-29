@@ -8,13 +8,10 @@
 ## Progress
 
 1. [X] Unit tests for all basic functions
-2. [ ] Use heap in the implementation of class `Assignmenter` to support faster query/modification of nearest facility information 
-3. [ ] Implement the `Assignmenter` class via Cython to accelerate.  
+2. [X] ~~Use heap in the implementation of class `Assignmenter` to support faster query/modification of nearest facility information~~ Discarded: this is not a bottleneck. 
+3. [X] ~~Implement the `Assignmenter` class via Cython to accelerate.~~ Discarded: pure Python is already fast enough.
 
-The profiling result shows that the major time-consuming part is in `Assignmenter.can_swap` (occupies > 95% total time), which consists of mainly the following parts:
-* `DistanceMatrix.pairwise_dist_argmin_min`: 53%. 
-* `Assignmenter.nearest_facility`: 15%
-* Rest: 27%
+The profiling result shows that the major time-consuming part is in `Assignmenter.can_swap` (occupies > 95% total time).
 
 ## Requirements
 
