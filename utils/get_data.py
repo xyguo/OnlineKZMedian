@@ -9,6 +9,16 @@ import os
 DATA_DIR = os.path.join(os.path.expanduser('~'), 'exp_data/clustering')
 
 
+def _get_shuttle_data():
+    SHUTTLE_DATA_DIR = 'shuttle'
+
+    full_data_path = os.path.join(DATA_DIR, SHUTTLE_DATA_DIR)
+    file_name = 'shuttle.npz'
+    X = np.load(os.path.join(full_data_path, file_name))
+
+    return X['data']
+
+
 def _get_parkinsons_data():
     PARKINSONS_DATA_DIR = 'parkinsons'
 
@@ -83,6 +93,7 @@ DATASETS = {
     'power': _get_power_data,
     'covertype': _get_covertype_data,
     'skin': _get_skin_data,
+    'shuttle': _get_shuttle_data
 }
 
 
