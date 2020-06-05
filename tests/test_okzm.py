@@ -23,7 +23,7 @@ class TestOKZM(unittest.TestCase):
         assert len(opened) == 10
         assert_array_equal(asgnt, true_asgnt)
 
-    def check_okzm(self, okzm, C, F, inlier_val, outlier_val, debugging):
+    def check_okzm(self, okzm, C, F, inlier_val, outlier_val, debugging, F_is_C=False, check_centers=True):
         # permute C and F
         np.random.shuffle(F)
         np.random.shuffle(C)
@@ -39,15 +39,17 @@ class TestOKZM(unittest.TestCase):
         debug_print("Optimal cost (removing outliers): {}".format(optimal_cost), debugging)
 
         dist_mat = pairwise_distances(C, F)
-        okzm.fit(C, F, distances=dist_mat)
+        okzm.fit(C, F, distances=dist_mat, F_is_C=F_is_C)
 
         debug_print("Identified outliers: {}".format(okzm.outlier_indices), debugging)
         debug_print("Cluster centers: {}".format(okzm.cluster_center_indices), debugging)
-        debug_print("Clustering cost: {}".format(okzm.cost), debugging)
-
+        debug_print("Clustering cost: {}".format(okzm.cost('p')), debugging)
+        assert okzm.cost('p') < 5 * optimal_cost
+        if not check_centers:
+            return None
         # check centers
         # Some times the centers doesn't match but that's because okzm can remove more than n_outliers outliers
-        if set(okzm.cluster_center_indices) != set(center_indices) and okzm.cost > 2 * optimal_cost:
+        if set(okzm.cluster_center_indices) != set(center_indices) and okzm.cost('p') > 2 * optimal_cost:
             print("Cluster center indices doesn't match:\n\tfitted center: {}\n\ttrue centers: {}"
                   .format(set(okzm.cluster_center_indices), set(center_indices)))
             assert False
@@ -140,6 +142,51 @@ class TestOKZM(unittest.TestCase):
                             random_swap_out=5, random_swap_in=20,
                             debugging=debugging)
         self.check_okzm(okzm2, C, F, inlier_val=20, outlier_val=800, debugging=debugging)
+
+    def test_evolving_F_and_z(self):
+        debugging = True
+        F = np.array([[9.9, 10],  # 0: cluster 1
+                      [10, -10],  # 1: cluster 2
+                      [-9.9, 10],  # 2: cluster 3
+                      [-10, -10]  # 3: cluster 4
+            ])
+        cov = np.identity(2) * 0.5
+        clusters = [np.random.multivariate_normal(mean=F[i], cov=cov, size=50)
+                    for i in range(4)]
+        C = np.vstack(clusters)
+
+        # add outliers to data
+        outlier_frac = 0.1
+        n_outliers = int(outlier_frac * len(C))
+        outlier_range = np.hstack([np.arange(-1200, -800), np.arange(800, 1200)])
+        outliers = np.random.choice(outlier_range, size=n_outliers).reshape(int(n_outliers/2), 2)
+        C = np.vstack((C, outliers))
+        np.random.shuffle(C)
+        _, optimal_costs = pairwise_distances_argmin_min(C, F)
+        optimal_cost = np.sort(optimal_costs)[:len(C)-n_outliers].sum()
+
+        # model parameters
+        n_clusters = 4
+        n_outliers_func = lambda j: int(outlier_frac * j)
+        epsilon = 0.1
+        gamma = 0
+        dist_mat = pairwise_distances(C, C)
+
+        # evolving F with fixed z
+        okzm1 = OnlineKZMed(n_clusters, n_outliers=n_outliers,
+                            epsilon=epsilon, gamma=gamma,
+                            debugging=debugging)
+        okzm1.fit(C, C.copy(), distances=dist_mat, F_is_C=True)
+        assert 5 * optimal_cost > okzm1.cost('p')
+
+        # evolving F with evolving z
+        okzm2 = OnlineKZMed(n_clusters, n_outliers=n_outliers,
+                            n_outliers_func=n_outliers_func,
+                            epsilon=epsilon, gamma=gamma,
+                            random_swap_out=5, random_swap_in=20,
+                            debugging=debugging)
+        okzm2.fit(C, C.copy(), distances=dist_mat, F_is_C=True)
+        assert 5 * optimal_cost > okzm2.cost('p')
 
 
 if __name__ == '__main__':

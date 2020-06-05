@@ -22,15 +22,6 @@ class TestAssignmenter(unittest.TestCase):
         fs_short = np.array([2, 3])
         dm = pairwise_distances(C, F)
 
-        # check that the clip parameter works
-        dmat = DistanceMatrix(C, F, p=0.1)
-        assert np.all(dmat.distances(np.arange(len(C)), np.arange(len(F)), pairwise=True) <= 0.1)
-        dmat.set_clip(0.2)
-        assert np.all(dmat.distances(np.arange(len(C)), np.arange(len(F)), pairwise=True) <= 0.2)
-        assert np.max(dmat.distances(np.arange(len(C)), np.arange(len(F)), pairwise=True)) >= 0.2
-        dmat.set_clip(None)
-        assert np.max(dmat.distances(np.arange(len(C)), np.arange(len(F)), pairwise=True)) >= 1
-
         # check when distances are computed realtime
         dmat = DistanceMatrix(C, F)
         assert_array_almost_equal(dmat.distances(cs, fs_long, pairwise=True), dm[np.ix_(cs, fs_long)], decimal=5)
@@ -79,6 +70,12 @@ class TestAssignmenter(unittest.TestCase):
         assert_array_equal(asgntr.active_client_idxs, np.arange(next_j))
         assert_array_equal(asgntr.assignment, conn)
         assert_almost_equal(asgntr.cost, 1.1 + np.sqrt(1 + 1.21), decimal=5)
+        assert_almost_equal(asgntr.cost_p(p=1, remove=False), 1 + 1, decimal=5)
+        assert_almost_equal(asgntr.cost_p(p=1.2, remove=True), 1.1, decimal=5)
+        assert_almost_equal(asgntr.cost_z(0), asgntr.cost, decimal=5)
+        assert_almost_equal(asgntr.cost_z(1), 1.1, decimal=5)
+        assert_almost_equal(asgntr.cost_z(2), 0, decimal=5)
+        assert_almost_equal(asgntr.cost_z(4), 0, decimal=5)
 
         # check the info of nearest facilities matches
         idxs, dists = asgntr.nearest_facility([0, 1])
@@ -126,10 +123,21 @@ class TestAssignmenter(unittest.TestCase):
                               opened_facilities_idxs=opened,
                               next_client=next)
 
+        asgntr.arrive(next - 1)
+        assert len(asgntr.active_client_idxs) == next
+        self.assertRaises(ValueError, asgntr.arrive, next + 1)
         asgntr.arrive(next)
+        assert len(asgntr.active_client_idxs) == next + 1
+
         assert_array_equal(asgntr.active_client_idxs, [0, 1, 2])
         assert_array_equal(asgntr.assignment, [2, 2, 2])  # the nearest open facility of client 2 is facility 2
         assert_almost_equal(asgntr.cost, 1.1 + np.sqrt(1 + 1.21) + np.sqrt(1 + 0.01), decimal=5)
+        assert_almost_equal(asgntr.cost_p(p=1, remove=False), 1 + 1 + 1, decimal=5)
+        assert_almost_equal(asgntr.cost_p(p=1.2, remove=True), 1.1 + np.sqrt(1 + 0.01), decimal=5)
+        assert_almost_equal(asgntr.cost_z(0), asgntr.cost, decimal=5)
+        assert_almost_equal(asgntr.cost_z(1), 1.1 + np.sqrt(1 + 0.01), decimal=5)
+        assert_almost_equal(asgntr.cost_z(2), np.sqrt(1 + 0.01), decimal=5)
+        assert_almost_equal(asgntr.cost_z(4), 0, decimal=5)
 
         # check cached info of nearest facilities is updated accordingly
         idxs, dists = asgntr.nearest_facility([0, 1, 2])
@@ -145,6 +153,57 @@ class TestAssignmenter(unittest.TestCase):
         assert asgntr.opened_idxs == {4, 1}
         assert asgntr.closed_idxs == {2, 3, 0, 5}
         assert_almost_equal(asgntr.cost, 1 + 0 + 1, decimal=5)
+        assert_almost_equal(asgntr.cost_p(p=0.8, remove=False), 0.8 + 0 + 0.8, decimal=5)
+        assert_almost_equal(asgntr.cost_p(p=0.8, remove=True), 0, decimal=5)
+        assert_almost_equal(asgntr.cost_z(0), asgntr.cost, decimal=5)
+        assert_almost_equal(asgntr.cost_z(1), 1 + 0, decimal=5)
+        assert_almost_equal(asgntr.cost_z(2), 0, decimal=5)
+        assert_almost_equal(asgntr.cost_z(4), 0, decimal=5)
+
+    def test_Assignmenter_F_eq_C(self):
+        C = np.array([[0, 0],   # client 0
+                      [0, 1],  # client 1
+                      [1, 1],  # client 2
+                      [-0.1, 0],  # client 0
+                      [0, 1],  # client 1
+                      [1.1, 0],  # facility 2
+                      [1, 1],  # facility 3
+                      [-1.2, 0],  # facility 4
+                      [0, 1.3]])  # facility 5
+        opened = {0, 1}
+        next = 2
+
+        asgntr = Assignmenter(C=C, F=C,
+                              F_is_C=True,
+                              opened_facilities_idxs=opened,
+                              next_client=next)
+        assert asgntr.opened_idxs == {0, 1}
+        assert len(asgntr.closed_idxs) == 0
+        assert_array_equal(asgntr.assignment[:next], [0,1])
+        assert asgntr.cost == 0
+        assert_array_equal(asgntr.cost_vec[:next], [0, 0])
+
+        asgntr.arrive(next)
+
+        assert_array_equal(asgntr.active_client_idxs, [0, 1, 2])
+        assert_array_equal(asgntr.assignment[:next+1], [0, 1, 1])  # the nearest open facility of client 2 is facility 2
+        assert_almost_equal(asgntr.cost, 0 + 0 + 1, decimal=5)
+        assert_almost_equal(asgntr.cost_p(p=1, remove=False), 0 + 0 + 1, decimal=5)
+        assert_almost_equal(asgntr.cost_p(p=1.2, remove=True), 0 + 0 + 1, decimal=5)
+        assert_almost_equal(asgntr.cost_z(0), asgntr.cost, decimal=5)
+        assert_almost_equal(asgntr.cost_z(1), 0 + 0, decimal=5)
+        assert_almost_equal(asgntr.cost_z(2), 0, decimal=5)
+        assert_almost_equal(asgntr.cost_z(4), 0, decimal=5)
+
+        # check cached info of nearest facilities is updated accordingly
+        idxs, dists = asgntr.nearest_facility([0, 1, 2])
+        assert_array_equal(idxs, [0, 1, 1])
+        assert_array_almost_equal(dists, [0, 0, 1], decimal=5)
+
+        # check that we can swap facility 1 with facility [2]
+        swap_out, reassigned, new_assignment, new_dist = asgntr.can_swap(swap_out=[2], swap_in=1,
+                                                                         cost_thresh=0.5, avg_cost_thresh=0.25)
+        assert swap_out is None
 
 
 if __name__ == '__main__':

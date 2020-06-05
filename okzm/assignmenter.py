@@ -5,29 +5,18 @@ from sklearn.metrics import pairwise_distances
 
 # TODO: rewrite the `[]` (__getitem__) operator to replace the cumbersome `distances` function
 class DistanceMatrix(object):
-    def __init__(self, C, F, p=None, dist_mat=None):
+    def __init__(self, C, F, dist_mat=None):
         """
         Mimic a distance matrix: it may compute the distance on-the-fly, but can be queried
         as a static distance matrix.
         :param C: array of shape=(n_clients, n_features)
         :param F: array of shape=(n_facilities, n_features)
-        :param p: float, whether to clip distance below this threshold.
-            If None, means no clipping.
         :param dist_mat: array of shape=(n_clients, n_facilities), precomputed distance matrix.
             If None, the distance will be computed on-the-fly.
         """
         self._C = C
         self._F = F
         self._dist_mat = dist_mat
-        if p is not None and (p <= 0 or np.isinf(p)):
-            p = None
-        self._p = p
-
-    def set_clip(self, p):
-        """set new clipping threshold"""
-        if p is not None and (p <= 0 or np.isinf(p)):
-            p = None
-        self._p = p
 
     def distances(self, c_idxs, f_idxs, pairwise=True):
         """
@@ -37,6 +26,7 @@ class DistanceMatrix(object):
         :param pairwise: if True then return an 2D array containing the pairwise distances between
             C[c_idxs] and F[f_idxs]; If False then return an 1D array containing the row-wise distances between
             C[c_idxs] and F[f_idxs] (this requires c_idxs and f_idxs has the same length)
+        :param p: float, threshold for clipping. If p=None then don't clip.
         :return dists:
         """
         if self._dist_mat is None:
@@ -49,7 +39,7 @@ class DistanceMatrix(object):
                 dists = self._dist_mat[np.ix_(c_idxs, f_idxs)]
             else:
                 dists = self._dist_mat[(c_idxs, f_idxs)]
-        return np.clip(dists, a_min=0, a_max=self._p) if self._p is not None else dists
+        return dists
 
     def pairwise_dist_argmin_min(self, c_idxs, f_idxs):
         """
@@ -93,24 +83,33 @@ class DistanceMatrix(object):
 class Assignmenter(object):
 
     def __init__(self, C, F, opened_facilities_idxs,
+                 F_is_C=False,
                  next_client=None,
                  dist_mat=None):
         """
         Object that store a facility solution and support efficient local search operations
         :param C: array of shape=(n_clients, n_features)
-        :param F: array of shape=(n_facilities, n_features)
+        :param F: array of shape=(n_facilities, n_features),
         :param opened_facilities_idxs: list or set of int, containing the indices of already opened facilities in F
+        :param F_is_C: bool, If True, then F will be C[:next_client], i.e., a dynamic set changing
+            with incoming clients
         :param next_client: int, containing the index of the first not-yet-arrived client
         :param dist_mat: a DistanceMatrix object.
         """
         self._C = C
-        self._F = F
-        self._n_clients, self._n_facilities = len(C), len(F)
-        self._opened_facilities_idxs = set(opened_facilities_idxs)
-        self._closed_facilities_idxs = set(range(self._n_facilities)).difference(self._opened_facilities_idxs)
-        #TODO: change active clients to a number instead of a list
+        self._n_clients = len(C)
         self._next_client = len(self._C) if next_client is None else next_client
         self._dist_mat = DistanceMatrix(C, F) if dist_mat is None else dist_mat
+        # If we use C as F, then F will also be a dynamic set changing with incoming clients
+        self._F = F
+        self._n_facilities = len(F)
+        self._opened_facilities_idxs = set(opened_facilities_idxs)
+        self._F_is_C = F_is_C
+        if F_is_C:
+            self._available_facilities = set(range(self._next_client)).union(self._opened_facilities_idxs)
+        else:
+            self._available_facilities = set(range(self._n_facilities))
+        self._closed_facilities_idxs = self._available_facilities.difference(self._opened_facilities_idxs)
 
         # facility information maintained to support fast updates
         # cache for neighborhood info for each client
@@ -169,6 +168,28 @@ class Assignmenter(object):
     def cost_vec(self):
         return self._conn_cost_vec
 
+    def cost_p(self, p, remove=False):
+        """return cost with threshold distance
+        :param p: float, distance threshold
+        :param remove: bool, if true, return the cost that discards all clients with distance more than p,
+            otherwise, return the cost when all distances are clipped to within p.
+        :return cost:
+        """
+        curr_cost = self._conn_cost_vec[:self._next_client]
+        if remove:
+            return curr_cost[curr_cost < p].sum()
+        else:
+            return np.clip(curr_cost, a_min=0, a_max=p).sum()
+
+    def cost_z(self, z):
+        """return cost with z outliers removed
+        :param z: int, number of outliers to be removed
+        :return cost:
+        """
+        curr_cost = self._conn_cost_vec[:self._next_client]
+        z = np.clip(z, a_min=0, a_max=len(curr_cost))
+        return np.sort(curr_cost)[:(len(curr_cost) - z)].sum()
+
     def is_open(self, i):
         return i in self._opened_facilities_idxs
 
@@ -179,6 +200,9 @@ class Assignmenter(object):
         if j != self._next_client:
             raise ValueError
         self._next_client = j + 1
+        if self._F_is_C:
+            self._available_facilities.add(j)
+            self._closed_facilities_idxs.add(j)
 
         indices = list(self._opened_facilities_idxs)
         dists = self._dist_mat.distances([j], indices, pairwise=True).ravel()
@@ -195,17 +219,12 @@ class Assignmenter(object):
 
         return self
 
-    def refresh_cache(self):
-        self._init_assignment()
-        self._update_2nd_nearest_facilities_info()
-
     def _update_2nd_nearest_facilities_info(self):
         if len(self._opened_facilities_idxs) >= 2:
             f_idxs = np.array(list(self._opened_facilities_idxs))
             idxs, dists = self._dist_mat.pairwise_dist_kth_nearest(self.active_client_idxs, f_idxs, k=1)
             self._2nd_nearest_facility_vec[:self._next_client] = idxs
             self._dist_to_2nd_nearest_facility_vec[:self._next_client] = dists
-            # TODO: initialize heap: do we really nead that?
         return None
 
     def _init_assignment(self):
@@ -254,7 +273,7 @@ class Assignmenter(object):
 
         return self
 
-    def can_swap(self, swap_in, swap_out=None, cost_thresh=0, avg_cost_thresh=0):
+    def can_swap(self, swap_in, swap_out=None, cost_thresh=0, avg_cost_thresh=0, p=None):
         """
         swap some opened facilities with new facilities
         :param swap_in: int, facility index to be open
@@ -262,6 +281,7 @@ class Assignmenter(object):
             if None then look at all current open facilities
         :param cost_thresh: float, threshold for total cost reduced
         :param avg_cost_thresh: float, threshold for cost-per-client-recourse reduced
+        :param p: float, distance threshold when calculating cost. If p=None then use no threshold.
         :return (i, reassigned, new_assignment, new_cost):
             i: index of the facility to be swapped out
             reassigned: list of indices of clients to be reassigned.
@@ -293,10 +313,16 @@ class Assignmenter(object):
             reassigned = np.where(np.logical_or(closer_to_swap_in,
                                                 cluster_i))[0]
 
-            # check if enough cost is reduced
+            # check if enough cost is reduced: remember to clip distance
             cost_a_s = np.minimum(dist_to_2nd_nearest[reassigned],
                                   dist_to_swap_in[reassigned])
-            saved_cost = curr_conn_cost[reassigned].sum() - cost_a_s.sum()
+            if p is None:
+                new_cost = cost_a_s.sum()
+                prev_cost = curr_conn_cost[reassigned].sum()
+            else:
+                new_cost = np.clip(cost_a_s, a_min=0, a_max=p).sum()
+                prev_cost = np.clip(curr_conn_cost[reassigned], a_min=0, a_max=p).sum()
+            saved_cost = prev_cost - new_cost
             if saved_cost < cost_thresh or saved_cost / (len(reassigned) + len(swap_out)) < avg_cost_thresh:
                 continue
 
