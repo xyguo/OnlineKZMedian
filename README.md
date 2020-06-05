@@ -3,7 +3,7 @@
 ## Structure
 
 * `OnlineKZMed`: The main algorithm implemented as a class in `okzm/okzm.py`.
-* `Assignmenter`: The data structure that maintains a clustering solution and supports (not yet) fast nearest-neighbor query.
+* `Assignmenter`: The data structure that maintains a clustering solution and supports (not yet) fast nearest-neighbor query. See `okzm/assignmenter` for details.
 
 ## Progress
 
@@ -18,12 +18,21 @@ The profiling result shows that the major time-consuming part is in `Assignmente
 * `numpy` >= 1.16.4
 * 0.23 >= `scikit-learn` >= 0.21.2
 
-## How to run it
+## To reproduce our experiment result
 
-The main experiment code is in `experiment_neurips20.py`, to run it, just execute the command:
+**WARNING**: we don't include the data set file in this code repository, so you need first download the data by yourself and put it in the correct path. See `utils/get_data.py` for details. But you can still try the code on synthesized data. 
+
+---
+
+The main experiment code is in `experiment_for_neurips20.py`, to run it, just execute the command:
 
 ```shell
-python experiment_neurips20.py
+python experiment_for_neurips20.py
+```
+This code records the recourse and cost of our algorithm. To suppress to verbose output, set variable value of `verbose=False` in the experiment file.
+
+To obtain the graph for approximation ratio, one need also estimate the offline OPT. This can be done by running
+```shell
+python experiment_estimate_opt.py
 ```
 
-To suppress to verbose output, set variable value of `verbose=False` in the experiment file.
