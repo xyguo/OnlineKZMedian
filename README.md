@@ -1,4 +1,4 @@
-# Local search algorithm for online *k*-median
+# Local search algorithm for online *k*-median with outliers
 
 ## Structure
 
