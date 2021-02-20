@@ -15,6 +15,7 @@ The profiling result shows that the major time-consuming part is in `Assignmente
 
 ## Requirements
 
+* `python` >= 3.4
 * `numpy` >= 1.16.4
 * 0.23 >= `scikit-learn` >= 0.21.2
 
@@ -24,10 +25,10 @@ The profiling result shows that the major time-consuming part is in `Assignmente
 
 ---
 
-The main experiment code is in `experiment_for_neurips20.py`, to run it, just execute the command:
+The main experiment code is in `experiment_Jun05.py`, to run it, just execute the command:
 
 ```shell
-python experiment_for_neurips20.py
+python experiment_Jun05.py
 ```
 This code records the recourse and cost of our algorithm. To suppress to verbose output, set variable value of `verbose=False` in the experiment file.
 
